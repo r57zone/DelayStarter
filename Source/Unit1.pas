@@ -4,7 +4,7 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, WinInet, StdCtrls, ExtCtrls, ShellAPI, IniFiles, ComCtrls;
+  Dialogs, WinInet, StdCtrls, ExtCtrls, ShellAPI, IniFiles, ComCtrls, MMSystem;
 
 type
   TMain = class(TForm)
@@ -33,10 +33,13 @@ var
   Main: TMain;
   MyThread: TMyThread;
   AppsList: TStringList;
-  FirstRun: boolean;
+  WriteLaunchTime, WaitInternetMode: boolean;
+  TimeFinished: boolean = false;
   StartTime, LaunchTime: int64;
 
-  IDS_WAITING_INTERNET_CONNECTION, IDS_REMAINING_TIME: string;
+  IDS_WAITING_TIME, IDS_WAITING_INTERNET_CONNECTION, IDS_REMAINING_TIME: string;
+  SoundPlay: boolean;
+  SoundFileName: string;
 
 implementation
 
@@ -50,7 +53,7 @@ var
   StrStream: TStringStream;
 begin
   Result:='';
-  hSession:=InternetOpen('Mozilla/4.0 (MSIE 6.0; Windows NT 5.1)', INTERNET_OPEN_TYPE_PRECONFIG, nil, nil, 0);
+  hSession:=InternetOpen('Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko', INTERNET_OPEN_TYPE_PRECONFIG, nil, nil, 0);
   if Assigned(hSession) then begin
 
     if Copy(LowerCase(URL), 1, 8) = 'https://' then
@@ -62,20 +65,23 @@ begin
     if Assigned(hUrl) then begin
       StrStream:=TStringStream.Create('');
       try
-        repeat
-          FillChar(Buffer, SizeOf(Buffer), 0);
-          BufferLen:=0;
-          if InternetReadFile(hURL, @Buffer, SizeOf(Buffer), BufferLen) then
-            StrStream.WriteBuffer(Buffer, BufferLen)
-          else
-            Break;
-          Application.ProcessMessages;
-        until BufferLen = 0;
-        Result:=StrStream.DataString;
-      except
-        Result:='';
+        try
+          repeat
+            FillChar(Buffer, SizeOf(Buffer), 0);
+            BufferLen:=0;
+            if InternetReadFile(hURL, @Buffer, SizeOf(Buffer), BufferLen) then
+              StrStream.WriteBuffer(Buffer, BufferLen)
+            else
+              Break;
+            Application.ProcessMessages;
+          until BufferLen = 0;
+          Result:=StrStream.DataString;
+        except
+          Result:='';
+        end;
+      finally
+        StrStream.Free;
       end;
-      StrStream.Free;
 
       InternetCloseHandle(hUrl);
     end;
@@ -103,30 +109,54 @@ end;
 procedure TMain.FormCreate(Sender: TObject);
 var
   Ini: TIniFile;
+  AppsFileName: string;
+  ForceEngLang: boolean;
+  i: integer;
 begin
   StartTime:=GetTickCount;
 
   Ini:=TIniFile.Create(ExtractFilePath(ParamStr(0)) + 'Setup.ini');
-  FirstRun:=Ini.ReadBool('Main', 'FirstRun', False);
+  WaitInternetMode:=Ini.ReadBool('Main', 'WaitInternet', false);
+  WriteLaunchTime:=Ini.ReadBool('Main', 'WriteLaunchTime', false);
   LaunchTime:=Ini.ReadInteger('Main', 'LaunchTime', 0) * 1000;
+  SoundPlay:=Ini.ReadBool('Main', 'PlaySound', false);
+  SoundFileName:=Trim(Ini.ReadString('Main', 'SoundFile', ''));
   Ini.Free;
 
+  ForceEngLang:=false;
+  AppsFileName:=ExtractFilePath(ParamStr(0)) + 'Apps.txt';
+  for i:=0 to ParamCount do begin
+    if (ParamStr(i) = '-f') and (ParamStr(i + 1) <> '') and (FileExists(ParamStr(i + 1))) then
+      AppsFileName:=ParamStr(i + 1)
+    else if ParamStr(i) = '-en' then
+      ForceEngLang:=true;
+  end;
+
   AppsList:=TStringList.Create;
-  if FileExists(ExtractFilePath(ParamStr(0)) + 'Apps.txt') then
-    AppsList.LoadFromFile(ExtractFilePath(ParamStr(0)) + 'Apps.txt');
+  if FileExists(AppsFileName) then begin
+    AppsList.LoadFromFile(AppsFileName);
+    AppsList.Text:=UTF8ToAnsi(AppsList.Text);
+  end;
+
   MyThread:=TMyThread.Create(False);
   MyThread.Priority:=tpNormal;
   MyThread.OnTerminate:=ThreadTerminate;
 
   Application.Title:=Caption;
-  if GetLocaleInformation(LOCALE_SENGLANGUAGE) <> 'Russian' then begin
+  if (ForceEngLang) or (GetLocaleInformation(LOCALE_SENGLANGUAGE) <> 'Russian')  then begin
+    IDS_WAITING_TIME:='Waiting...';
     IDS_WAITING_INTERNET_CONNECTION:='Waiting for internet connection...';
     IDS_REMAINING_TIME:='Remaining time: ';
   end else begin
+    IDS_WAITING_TIME:='Ожидаем...';
     IDS_WAITING_INTERNET_CONNECTION:='Ждём подключения интернет-соединения...';
     IDS_REMAINING_TIME:='Осталось времени: ';
   end;
-  TextLbl.Caption:=IDS_WAITING_INTERNET_CONNECTION + #13#10 + IDS_REMAINING_TIME + '0:00';
+
+  if WaitInternetMode then
+    Main.TextLbl.Caption:=IDS_WAITING_INTERNET_CONNECTION + #13#10 + IDS_REMAINING_TIME + '0:00'
+  else
+    Main.TextLbl.Caption:=IDS_WAITING_TIME + #13#10 + IDS_REMAINING_TIME + '0:00';
 end;
 
 procedure TMain.FormClose(Sender: TObject; var Action: TCloseAction);
@@ -165,9 +195,12 @@ begin
   while not Terminated do begin
     //Synchronize(UpdateUI);
 
-    if HTTPGet('http://www.msftconnecttest.com/connecttest.txt') = 'Microsoft Connect Test' then begin
+    if (TimeFinished) or (WaitInternetMode and (HTTPGet('http://www.msftconnecttest.com/connecttest.txt') = 'Microsoft Connect Test') ) then begin
 
-      if FirstRun then begin
+      if (SoundPlay) and (SoundFileName <> '') then
+        sndPlaySound(PChar(SoundFileName), SND_SYNC);
+
+      if (WaitInternetMode) and (WriteLaunchTime) then begin
         Ini:=TIniFile.Create(ExtractFilePath(ParamStr(0)) + 'Setup.ini');
         Ini.WriteBool('Main', 'FirstRun', False);
         Ini.WriteInteger('Main', 'LaunchTime', (GetTickCount - StartTime) div 1000);
@@ -189,7 +222,7 @@ begin
           AppParams:='';
         end;
 
-        if not FileExists(AppsList.Strings[i]) then Continue;
+        if not FileExists(AppPath) then Continue;
 
         ShellExecute(0, 'open', PChar(AppPath), PChar(AppParams), nil, SW_SHOWNORMAL);
 
@@ -207,9 +240,16 @@ var
   RemainingTime: int64;
 begin
   RemainingTime:=LaunchTime - (GetTickCount - StartTime);
-  if RemainingTime < 0 then RemainingTime:=0;
+  if RemainingTime < 0 then begin
+    RemainingTime:=0;
+    if WaitInternetMode = false then
+      TimeFinished:=true;
+  end;
 
-  Main.TextLbl.Caption:=IDS_WAITING_INTERNET_CONNECTION + #13#10 + IDS_REMAINING_TIME + MsToMinSec(RemainingTime);
+  if WaitInternetMode then
+    Main.TextLbl.Caption:=IDS_WAITING_INTERNET_CONNECTION + #13#10 + IDS_REMAINING_TIME + MsToMinSec(RemainingTime)
+  else
+    Main.TextLbl.Caption:=IDS_WAITING_TIME + #13#10 + IDS_REMAINING_TIME + MsToMinSec(RemainingTime);
 end;
 
 end.
