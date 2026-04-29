@@ -6,7 +6,7 @@
 Utility for launching applications after a countdown timer or upon internet connection. If the internet is unavailable, the apps will wait for a connection instead of launching immediately, displaying a countdown timer.
 
 ## Setup
-1. Add the full paths of the required applications to `Apps.txt`. To pass launch arguments, use the `|` separator, e.g. `C:\Windows\System32\notepad.exe|C:\log.txt`
+1. Add the full paths of the required applications to `Apps.txt`. To pass launch arguments, use the `|` separator, e.g. `C:\Windows\System32\notepad.exe|C:\log.txt`. You can also use other files. To do this, use the `-f` launch parameter, for example: `DelayStarter -f apps2.txt`.
 2. Add a shortcut of the application to Windows startup folder `%AppData%\Microsoft\Windows\Start Menu\Programs\Startup`.
 3. You can change the parameters and modes in the `Setup.ini` configuration file.
 
